@@ -34,6 +34,11 @@ Software License Terms and Conditions
 #include <stdio.h>
 #include <assert.h>
 
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
+
 #define SIZE 32768
 
 static const long long mask[8] =
@@ -294,6 +299,11 @@ static void Decompress()
 int main(int argc, char *argv[])
 {
   long val, ioc;
+
+#ifdef _WIN32
+  _setmode(_fileno(stdin), _O_BINARY);
+  _setmode(_fileno(stdout), _O_BINARY);
+#endif
 
   assert(4 <= sizeof(long));
   assert(8 == sizeof(long long));
