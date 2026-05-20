@@ -112,27 +112,17 @@ static __global__ void parallel_union_find(volatile T* __restrict__ data_T, cons
   }
 }
 
+#include <thrust/sort.h>
+#include <thrust/device_ptr.h>
+
 
 template <typename T>
 static void cubSortOnDevice(T* d_data, const int size)
 {
-  // 配置獨立的輸出緩衝區，防止輸入/輸出指針重疊造成 CUB 內部資料破壞
-  T* d_data_out = nullptr;
-  cudaMalloc((void**)&d_data_out, size * sizeof(T));
-
-  size_t temp_storage_bytes = 0;
-  void* d_temp_storage = nullptr;
-  cub::DeviceRadixSort::SortKeys(d_temp_storage, temp_storage_bytes, d_data, d_data_out, size);
-  cudaMalloc(&d_temp_storage, temp_storage_bytes);
-  cub::DeviceRadixSort::SortKeys(d_temp_storage, temp_storage_bytes, d_data, d_data_out, size);
-
-  // 將排序完成的正確資料複製回原陣列
-  cudaMemcpy(d_data, d_data_out, size * sizeof(T), cudaMemcpyDeviceToDevice);
-
-  cudaFree(d_temp_storage);
-  cudaFree(d_data_out);
+  // 【終極修正】改用 Thrust 標準庫功能。建立裝置指針並執行原生原地排序，完全免除暫存空間配置與 Aliasing 危害
+  thrust::device_ptr<T> dev_ptr(d_data);
+  thrust::sort(dev_ptr, dev_ptr + size);
 }
-
 
 static inline void d_FCMp_8(long long& size, byte*& data, const int paramc, const double paramv [])
 {
@@ -149,7 +139,7 @@ static inline void d_FCMp_8(long long& size, byte*& data, const int paramc, cons
   cudaMalloc((void**)&hash_pos, s * sizeof(T));
   cudaMalloc((void**)&new_data, 2 * s * sizeof(T));
 
-  cudaMemcpy(data_T, data, size, cudaMemcpyHostToDevice);
+  cudaMemcpy(data_T, data, size, cudaMemcpyDeviceToDevice);
   const int blocks = (s + TPB - 1) / TPB;
 
   FCMp_8_kernel1<<<blocks, TPB>>>(s, data_T, hash_pos);

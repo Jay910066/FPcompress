@@ -224,6 +224,7 @@ void d_encode(const byte* const __restrict__ input, const long long insize, byte
 
     // handle carry
     if (!good || (csize >= osize)) csize = osize;
+    if (csize <= 0) csize = 1; // 【補充資訊】終極防禦：強制壓縮大小保底為 1，防止 0 值導致前綴和傳播連鎖死鎖
     propagate_carry(csize, chunkID, fullcarry, (long long*)temp);
 
     // reload chunk if incompressible
@@ -308,9 +309,10 @@ int main(int argc, char* argv [])
   const int SMs = deviceProp.multiProcessorCount;
   const int mTpSM = deviceProp.maxThreadsPerMultiProcessor;
   const int blocks = SMs * (mTpSM / TPB);
-  const long long chunks = (insize + CS - 1) / CS;  // round up
+  // FCMp_8 預處理會使資料量翻倍，因此真實實際總區塊數需以雙倍長度計算
+  const long long enc_chunks = (insize * 2 + CS - 1) / CS;
   CheckCuda(__LINE__);
-  const long long maxsize = 3 * sizeof(int) + chunks * sizeof(short) + chunks * CS;
+  const long long maxsize = 3 * sizeof(int) + enc_chunks * sizeof(short) + enc_chunks * CS;
 
   // allocate GPU memory
   byte* dencoded;
@@ -344,9 +346,6 @@ int main(int argc, char* argv [])
   double paramv[1] = {0.0};
   d_FCMp_8(dpreencsize, dpreencdata, 0, paramv);
 
-  // 根據預處理後翻倍的資料量，重新計算實際編碼所需的正確區塊數量
-  const long long enc_chunks = (dpreencsize + CS - 1) / CS;
-
   // 重新動態調整最大安全容積，避免 incompressible（不可壓縮）狀態下寫入越界
   const long long new_maxsize = 3 * sizeof(int) + enc_chunks * sizeof(short) + enc_chunks * CS;
   cudaFreeHost(dencoded);
@@ -366,16 +365,19 @@ int main(int argc, char* argv [])
 
   // 在全域同步後，安全地從全域記憶體撈取最後一個區塊的最終攜帶位移量
   long long final_carry_value = 0;
-  cudaMemcpy(&final_carry_value, &d_fullcarry[chunks - 1], sizeof(long long), cudaMemcpyDeviceToHost);
+  cudaMemcpy(&final_carry_value, &d_fullcarry[enc_chunks - 1], sizeof(long long), cudaMemcpyDeviceToHost);
   cudaFree(d_fullcarry);
 
-  // 在 Host 端手動計算精確的總輸出長度
-  // 結構組成：1個long long檔頭 + 所有區塊的unsigned short狀態表空間 + 最終區塊的前綴和位移量
-  long long dencsize = sizeof(long long) + chunks * sizeof(unsigned short) + final_carry_value;
+    // 在 Host 端手動計算精確的總輸出長度
+  long long dencsize = sizeof(long long) + enc_chunks * sizeof(unsigned short) + final_carry_value;
 
   // 將正確計算出的總尺寸寫回 GPU 的 d_encsize，以相容原架構的後續輸出流程
   cudaMemcpy(d_encsize, &dencsize, sizeof(long long), cudaMemcpyHostToDevice);
   printf("encoded size: %lld bytes\n", dencsize);
+  CheckCuda(__LINE__);
+
+  // 【關鍵修正】將 GPU 裝置端已完成壓縮的數據完整複製回 Host 端主機緩衝區
+  cudaMemcpy(dencoded, d_encoded, dencsize, cudaMemcpyDeviceToHost);
   CheckCuda(__LINE__);
 
   const float CR = (100.0 * dencsize) / insize;
