@@ -116,17 +116,21 @@ static __global__ void parallel_union_find(volatile T* __restrict__ data_T, cons
 template <typename T>
 static void cubSortOnDevice(T* d_data, const int size)
 {
-  // Allocate temporary storage for sorting
+  // 配置獨立的輸出緩衝區，防止輸入/輸出指針重疊造成 CUB 內部資料破壞
+  T* d_data_out = nullptr;
+  cudaMalloc((void**)&d_data_out, size * sizeof(T));
+
   size_t temp_storage_bytes = 0;
   void* d_temp_storage = nullptr;
-  cub::DeviceRadixSort::SortKeys(d_temp_storage, temp_storage_bytes, d_data, d_data, size);
+  cub::DeviceRadixSort::SortKeys(d_temp_storage, temp_storage_bytes, d_data, d_data_out, size);
   cudaMalloc(&d_temp_storage, temp_storage_bytes);
+  cub::DeviceRadixSort::SortKeys(d_temp_storage, temp_storage_bytes, d_data, d_data_out, size);
 
-  // Perform sorting
-  cub::DeviceRadixSort::SortKeys(d_temp_storage, temp_storage_bytes, d_data, d_data, size);
+  // 將排序完成的正確資料複製回原陣列
+  cudaMemcpy(d_data, d_data_out, size * sizeof(T), cudaMemcpyDeviceToDevice);
 
-  // Free temporary storage
   cudaFree(d_temp_storage);
+  cudaFree(d_data_out);
 }
 
 

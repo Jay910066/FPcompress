@@ -131,14 +131,14 @@ static inline __device__ void propagate_carry(const int value, const int chunkID
       const int mask = __ballot_sync(~0, val > 0);
       const int pos = __ffs(mask) - 1;
       int partc = (lane < pos) ? -val : 0;
-      partc = __reduce_add_sync(~0, partc);
-/*
+      //partc = __reduce_add_sync(~0, partc);
+
       partc += __shfl_xor_sync(~0, partc, 1);  // MB: use reduction on 8.6 devices
       partc += __shfl_xor_sync(~0, partc, 2);
       partc += __shfl_xor_sync(~0, partc, 4);
       partc += __shfl_xor_sync(~0, partc, 8);
       partc += __shfl_xor_sync(~0, partc, 16);
-*/
+
       if (lane == pos) {
         const int fullc = partc + val;
         fullcarry[chunkID] = fullc + value;
@@ -153,8 +153,8 @@ static __global__ __launch_bounds__(TPB, 4)
 void d_encode(const byte* const __restrict__ input, const int insize, byte* const __restrict__ output, int* const __restrict__ outsize, int* const __restrict__ fullcarry)
 {
   // allocate shared memory buffer
-  __shared__ long long chunk [2 * (CS / sizeof(long long)) + 4 + 17];
-  const int last = 2 * (CS / sizeof(long long)) + WS;
+  __shared__ long long chunk [3 * (CS / sizeof(long long))];
+  const int last = 3 * (CS / sizeof(long long)) - 2 - WS;
 
   // create the 3 shared memory buffers
   byte* const in = (byte*)&chunk[0 * (CS / sizeof(long long))];

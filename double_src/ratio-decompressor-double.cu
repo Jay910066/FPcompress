@@ -301,7 +301,7 @@ int main(int argc, char* argv [])
   d_reset<<<1, 1>>>();
   d_decode<<<blocks, TPB>>>(d_encoded, d_decoded, d_decsize);
   cudaMemcpy(&ddecsize, d_decsize, sizeof(long long), cudaMemcpyDeviceToHost);
-  double paramv[] = {};
+  double paramv[1] = {0.0};
   d_iFCMp_8(ddecsize, d_decoded, 0, paramv);
 
   cudaDeviceSynchronize();

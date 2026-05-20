@@ -247,8 +247,6 @@ void d_encode(const byte* const __restrict__ input, const long long insize, byte
     if ((tid == 0) && (base + CS >= insize)) {
       // output header
       head_out[0] = insize;
-      // compute compressed size
-      *outsize = &data_out[fullcarry[chunkID]] - output;
     }
   } while (true);
 }
@@ -336,28 +334,47 @@ int main(int argc, char* argv [])
     cudaMalloc((void **)&d_preencdata, insize);
     cudaMemcpy(d_preencdata, d_input, insize, cudaMemcpyDeviceToDevice);
     long long dpreencsize = insize;
-    double paramv[] = {};
+    double paramv[1] = {0.0};
     d_FCMp_8(dpreencsize, d_preencdata, 0, paramv);
     cudaFree(d_preencdata);
   }
 
   GPUTimer dtimer;
   dtimer.start();
-  double paramv[] = {};
+  double paramv[1] = {0.0};
   d_FCMp_8(dpreencsize, dpreencdata, 0, paramv);
+
+  // 根據預處理後翻倍的資料量，重新計算實際編碼所需的正確區塊數量
+  const long long enc_chunks = (dpreencsize + CS - 1) / CS;
+
+  // 重新動態調整最大安全容積，避免 incompressible（不可壓縮）狀態下寫入越界
+  const long long new_maxsize = 3 * sizeof(int) + enc_chunks * sizeof(short) + enc_chunks * CS;
+  cudaFreeHost(dencoded);
+  cudaFree(d_encoded);
+  cudaMallocHost((void **)&dencoded, new_maxsize);
+  cudaMalloc((void **)&d_encoded, new_maxsize);
+
   long long* d_fullcarry;
-  cudaMalloc((void **)&d_fullcarry, chunks * sizeof(long long));
+  cudaMalloc((void **)&d_fullcarry, enc_chunks * sizeof(long long));
   d_reset<<<1, 1>>>();
-  cudaMemset(d_fullcarry, 0, chunks * sizeof(byte));
+  cudaMemset(d_fullcarry, 0, enc_chunks * sizeof(long long)); // 同步修正配置型態大小
   d_encode<<<blocks, TPB>>>(dpreencdata, dpreencsize, d_encoded, d_encsize, d_fullcarry);
-  cudaFree(d_fullcarry);
+
+  // 必須在全網格同步完成後，才能讀取前綴和數據
   cudaDeviceSynchronize();
   double runtime = dtimer.stop();
 
-  // get encoded GPU result
-  long long dencsize = 0;
-  cudaMemcpy(&dencsize, d_encsize, sizeof(long long), cudaMemcpyDeviceToHost);
-  cudaMemcpy(dencoded, d_encoded, dencsize, cudaMemcpyDeviceToHost);
+  // 在全域同步後，安全地從全域記憶體撈取最後一個區塊的最終攜帶位移量
+  long long final_carry_value = 0;
+  cudaMemcpy(&final_carry_value, &d_fullcarry[chunks - 1], sizeof(long long), cudaMemcpyDeviceToHost);
+  cudaFree(d_fullcarry);
+
+  // 在 Host 端手動計算精確的總輸出長度
+  // 結構組成：1個long long檔頭 + 所有區塊的unsigned short狀態表空間 + 最終區塊的前綴和位移量
+  long long dencsize = sizeof(long long) + chunks * sizeof(unsigned short) + final_carry_value;
+
+  // 將正確計算出的總尺寸寫回 GPU 的 d_encsize，以相容原架構的後續輸出流程
+  cudaMemcpy(d_encsize, &dencsize, sizeof(long long), cudaMemcpyHostToDevice);
   printf("encoded size: %lld bytes\n", dencsize);
   CheckCuda(__LINE__);
 

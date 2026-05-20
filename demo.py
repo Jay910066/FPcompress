@@ -195,15 +195,17 @@ def check_and_compile():
                 else:
                     xcompiler_flags = "-O3 -march=native -fopenmp"
                 
-                # Use architecture sm_75 for Turing GPUs, if compilation fails, try fallback sm_80
-                ok, _, err = run_cmd(f"nvcc -O3 -arch=sm_75 -fmad=false -Xcompiler \"{xcompiler_flags}\" -I. -std=c++17 -o {exe_path} {os.path.join(folder, src)}")
+                # 使用 -arch=native 自動偵測當前主機的實體 GPU 架構編譯，徹底解決 Error 209
+                ok, _, err = run_cmd(f"nvcc -O3 -arch=native -fmad=false -Xcompiler \"{xcompiler_flags}\" -I. -std=c++17 -o {exe_path} {os.path.join(folder, src)}")
                 if ok:
-                    print(f" {Color.GREEN}OK{Color.END}")
+                    print(f" {Color.GREEN}OK (Native GPU Arch){Color.END}")
                 else:
-                    print(f" {Color.YELLOW}FAIL (Try fallback arch sm_80)...{Color.END}", end="")
-                    ok, _, err = run_cmd(f"nvcc -O3 -arch=sm_80 -fmad=false -Xcompiler \"{xcompiler_flags}\" -I. -std=c++17 -o {exe_path} {os.path.join(folder, src)}")
+                    print(f" {Color.YELLOW}FAIL (Try forward-compatible PTX fallback)...{Color.END}", end="")
+                    # 若 native 失敗，改用 gencode 封裝 sm_80 與 compute_80 PTX，提供向後相容與 JIT 即時轉譯能力
+                    compat_cmd = f"nvcc -O3 -gencode arch=compute_80,code=sm_80 -gencode arch=compute_80,code=compute_80 -fmad=false -Xcompiler \"{xcompiler_flags}\" -I. -std=c++17 -o {exe_path} {os.path.join(folder, src)}"
+                    ok, _, err = run_cmd(compat_cmd)
                     if ok:
-                        print(f" {Color.GREEN}OK{Color.END}")
+                        print(f" {Color.GREEN}OK (Forward Compatible PTX){Color.END}")
                     else:
                         print(f" {Color.RED}FAIL: GPU target will be disabled.{Color.END}")
                         gpu_compiled_successfully = False
