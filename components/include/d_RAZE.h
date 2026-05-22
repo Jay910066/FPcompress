@@ -56,15 +56,19 @@ static __device__ inline bool d_RAZE(int& csize, byte in [CS], byte out [CS], by
   T* const in_t = (T*)in;  // T cast
   T* const out_t = (T*)out;
 
+
+
+
+
   // count how many MSBs are zero
   int* const count = (int*)temp;  // bits + 2 elements (66)
-  if (tid < bits) count[tid] = 0;
+  if (tid < 68) count[tid] = 0;
   __syncthreads();
 
-  bool allzeros = true;
+  volatile int allzeros_val = 1;
   for (int i = tid; i < size; i += TPB) {
     const T val = in_t[i];
-    if (val != 0) allzeros = false;
+    if (val != 0) allzeros_val = 0;
     if constexpr (sizeof(T) == 8) {
       const int keep = (val == 0) ? 0 : (64 - __builtin_clzll((long long)val));
       atomicAdd_block(&count[keep], 1);
@@ -73,7 +77,7 @@ static __device__ inline bool d_RAZE(int& csize, byte in [CS], byte out [CS], by
       atomicAdd_block(&count[keep], 1);
     }
   }
-  allzeros = __syncthreads_and(allzeros);
+  bool allzeros = __syncthreads_and(allzeros_val);
 
   // special case if all values (other than extra) are zero
   if (allzeros) {
@@ -132,10 +136,11 @@ static __device__ inline bool d_RAZE(int& csize, byte in [CS], byte out [CS], by
       val = max(val, __shfl_xor_sync(~0, val, 32));
       #endif
       assert(WS == 32);
-      const int bal = __ballot_sync(~0, val == sav);
+      const int max_val = __shfl_sync(~0, val, 0);
+      const int bal = __ballot_sync(~0, max_val == sav);
       const int who = __ffs(bal) - 1;
-      if (lane == 0) count[64] = val;  // saved
-      if (lane == 0) count[65] = who;  // keep
+      if (lane == 0) count[66] = max_val;  // saved
+      if (lane == 0) count[67] = who;  // keep
     }
   } else {
     assert(bits == WS * 2);
@@ -183,18 +188,19 @@ static __device__ inline bool d_RAZE(int& csize, byte in [CS], byte out [CS], by
       val = max(val, __shfl_xor_sync(~0, val, 32));
       #endif
       assert(WS == 32);
-      const int bal = __ballot_sync(~0, (val == sav0) || (val == sav1));
+      const int max_val = __shfl_sync(~0, val, 0);
+      const int bal = __ballot_sync(~0, (max_val == sav0) || (max_val == sav1));
       const int who = __ffs(bal) - 1;
       if (lane == who) {
-        count[64] = val;  // saved
-        count[65] = (val == sav0) ? l0 : l1;  // keep
+        count[66] = max_val;  // saved
+        count[67] = (max_val == sav0) ? l0 : l1;  // keep
       }
     }
   }
   __syncthreads();
 
-  const int saved = count[64];
-  const int keep = count[65];
+  const int saved = count[66];
+  const int keep = count[67];
   const int countk = count[keep];
 
   // special case if all bits need to be kept
@@ -229,7 +235,7 @@ static __device__ inline bool d_RAZE(int& csize, byte in [CS], byte out [CS], by
   __syncthreads();
 
   // create bitmap
-  byte* const bitmap = (byte*)&count[66];  // num elements
+  byte* const bitmap = (byte*)&count[68];  // num elements
 
   // initialize
   const T tmask = ~(T)0 << keep;  // 111...00
@@ -389,7 +395,7 @@ static __device__ inline void d_iRAZE(int& csize, byte in [CS], byte out [CS], b
     assert(CS == 16384);
     int rpos = csize - 3 - extra;
     int* const temp_w = (int*)temp;
-    byte* const bitmap = (byte*)&temp_w[WS];
+    byte* const bitmap = (byte*)&temp_w[WS + 2];
 
     // iteratively decompress bitmaps
     int base, range;

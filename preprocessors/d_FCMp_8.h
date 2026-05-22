@@ -38,6 +38,18 @@ Sponsor: This code is based upon work supported by the U.S. Department of Energy
 
 
 #include <cub/cub.cuh>
+#include <stdexcept>
+#include <cstdio>
+
+static inline void CheckCudaLocal(const int line)
+{
+  cudaError_t e;
+  cudaDeviceSynchronize();
+  if (cudaSuccess != (e = cudaGetLastError())) {
+    fprintf(stderr, "CUDA error %d on line %d: %s\n\n", e, line, cudaGetErrorString(e));
+    exit(-1);
+  }
+}
 
 
 static __device__ inline int d_hash12(const unsigned long long val)
@@ -112,23 +124,41 @@ static __global__ void parallel_union_find(volatile T* __restrict__ data_T, cons
   }
 }
 
-#include <thrust/sort.h>
-#include <thrust/device_ptr.h>
-
 
 template <typename T>
 static void cubSortOnDevice(T* d_data, const int size)
 {
-  // 【終極修正】改用 Thrust 標準庫功能。建立裝置指針並執行原生原地排序，完全免除暫存空間配置與 Aliasing 危害
-  thrust::device_ptr<T> dev_ptr(d_data);
-  thrust::sort(dev_ptr, dev_ptr + size);
+  // Allocate a separate array for the sorted output keys
+  T* d_data_out = nullptr;
+  cudaMalloc(&d_data_out, size * sizeof(T));
+  CheckCudaLocal(__LINE__);
+
+  // Allocate temporary storage for sorting
+  size_t temp_storage_bytes = 0;
+  void* d_temp_storage = nullptr;
+  cub::DeviceRadixSort::SortKeys(d_temp_storage, temp_storage_bytes, d_data, d_data_out, size);
+  cudaMalloc(&d_temp_storage, temp_storage_bytes);
+  CheckCudaLocal(__LINE__);
+
+  // Perform sorting
+  cub::DeviceRadixSort::SortKeys(d_temp_storage, temp_storage_bytes, d_data, d_data_out, size);
+  CheckCudaLocal(__LINE__);
+
+  // Copy sorted keys back to the original buffer
+  cudaMemcpy(d_data, d_data_out, size * sizeof(T), cudaMemcpyDeviceToDevice);
+  CheckCudaLocal(__LINE__);
+
+  // Free temporary storage
+  cudaFree(d_temp_storage);
+  cudaFree(d_data_out);
 }
+
 
 static inline void d_FCMp_8(long long& size, byte*& data, const int paramc, const double paramv [])
 {
   using T = unsigned long long;
 
-  if (size % sizeof(T) != 0) {fprintf(stderr, "d_FCMp_8: ERROR: size of input must be a multiple of %ld bytes\n", sizeof(T));  exit(-1);}
+  if (size % sizeof(T) != 0) {fprintf(stderr, "d_FCMp_8: ERROR: size of input must be a multiple of %zu bytes\n", sizeof(T));  exit(-1);}
 
   const int s = size / sizeof(T);
   T* data_T;
@@ -138,15 +168,56 @@ static inline void d_FCMp_8(long long& size, byte*& data, const int paramc, cons
   cudaMalloc((void**)&data_T, size);
   cudaMalloc((void**)&hash_pos, s * sizeof(T));
   cudaMalloc((void**)&new_data, 2 * s * sizeof(T));
+  CheckCudaLocal(__LINE__);
 
   cudaMemcpy(data_T, data, size, cudaMemcpyDeviceToDevice);
+  CheckCudaLocal(__LINE__);
   const int blocks = (s + TPB - 1) / TPB;
 
   FCMp_8_kernel1<<<blocks, TPB>>>(s, data_T, hash_pos);
+  CheckCudaLocal(__LINE__);
 
   cubSortOnDevice(hash_pos, s);
+  CheckCudaLocal(__LINE__);
 
   FCMp_8_kernel2<<<blocks, TPB>>>(s, data_T, hash_pos, new_data);
+  CheckCudaLocal(__LINE__);
+
+  // Debug print block
+  {
+    const int print_size = 10;
+    T* h_data_T = new T[s];
+    T* h_hash_pos = new T[s];
+    T* h_new_data = new T[2 * s];
+    
+    cudaMemcpy(h_data_T, data_T, s * sizeof(T), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_hash_pos, hash_pos, s * sizeof(T), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_new_data, new_data, 2 * s * sizeof(T), cudaMemcpyDeviceToHost);
+    
+    printf("\n=== [DEBUG d_FCMp_8] size s = %d ===\n", s);
+    printf("Original data_T (first 10): ");
+    for(int j=0; j<print_size && j<s; j++) printf("%016llx ", h_data_T[j]);
+    printf("\n");
+    
+    printf("Sorted hash_pos (first 10): ");
+    for(int j=0; j<print_size && j<s; j++) printf("%016llx ", h_hash_pos[j]);
+    printf("\n");
+    
+    printf("Sorted hash_pos (last 10): ");
+    for(int j=s-print_size; j<s; j++) { if(j>=0) printf("%016llx ", h_hash_pos[j]); }
+    printf("\n");
+    
+    printf("Processed new_data values (first 10): ");
+    for(int j=0; j<print_size && j<s; j++) printf("%016llx ", h_new_data[j]);
+    printf("\n");
+    printf("Processed new_data dists (first 10): ");
+    for(int j=0; j<print_size && j<s; j++) printf("%016llx ", h_new_data[j + s]);
+    printf("\n====================================\n\n");
+    
+    delete[] h_data_T;
+    delete[] h_hash_pos;
+    delete[] h_new_data;
+  }
 
   data = (byte*)new_data;
   size *= 2;
@@ -157,13 +228,14 @@ static inline void d_iFCMp_8(long long& size, byte*& data, const int paramc, con
 {
   using T = unsigned long long;
 
-  if (size % (sizeof(T) * 2) != 0) {fprintf(stderr, "d_FCMp_8: ERROR: size of input must be a multiple of %ld bytes\n", sizeof(T) * 2); exit(-1);}
+  if (size % (sizeof(T) * 2) != 0) {fprintf(stderr, "d_FCMp_8: ERROR: size of input must be a multiple of %llu bytes\n", sizeof(T) * 2); exit(-1);}
 
   const int s = size / (sizeof(T) * 2);
   T* const data_T = (T*)data;
 
   const int blocks = (s + TPB - 1) / TPB;
   parallel_union_find<<<blocks, TPB>>>(data_T, s);
+  CheckCudaLocal(__LINE__);
 
   size /= 2;
 }

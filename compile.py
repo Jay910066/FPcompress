@@ -25,37 +25,44 @@ def move_executables(src_dir):
             shutil.move(os.path.join(src_dir, file), bin_dir)
 
 def main():
+    # 宣告 MSVC 編譯器所在之目錄絕對路徑（根據您先前的環境變數設定）
+    msvc_path = r"C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.50.35717\bin\Hostx64\x64"
+    ccbin_arg = f'-ccbin "{msvc_path}"'
+    
+    # 定義傳遞給 MSVC 的專屬參數（取代原先的 GCC 參數以避免警告與 C1189 錯誤）
+    xcompiler_args = r'-Xcompiler "/O2 /openmp /Zc:preprocessor"'
+
     src_dir = "single_src"
     create_bin_folder(src_dir)
 
-    # Compile CPU compressors and decompressors
+    # Compile CPU compressors and decompressors (保留 g++)
     compile_code(f"g++ -O3 -march=native -fopenmp -I. -std=c++17 -o {os.path.join(src_dir, 'ratio-cpu-compress.exe')} {os.path.join(src_dir, 'ratio-compressor-single.cpp')}", src_dir)
     compile_code(f"g++ -O3 -march=native -fopenmp -I. -std=c++17 -o {os.path.join(src_dir, 'ratio-cpu-decompress.exe')} {os.path.join(src_dir, 'ratio-decompressor-single.cpp')}", src_dir)
     compile_code(f"g++ -O3 -march=native -fopenmp -I. -std=c++17 -o {os.path.join(src_dir, 'speed-cpu-compress.exe')} {os.path.join(src_dir, 'speed-compressor-single.cpp')}", src_dir)
     compile_code(f"g++ -O3 -march=native -fopenmp -I. -std=c++17 -o {os.path.join(src_dir, 'speed-cpu-decompress.exe')} {os.path.join(src_dir, 'speed-decompressor-single.cpp')}", src_dir)
 
-    # Compile GPU compressors and decompressors
-    compile_code(f"nvcc -O3 -arch=sm_80 -fmad=false -Xcompiler \"-O3 -march=native -fopenmp\" -I. -std=c++17 -o {os.path.join(src_dir, 'ratio-gpu-compress.exe')} {os.path.join(src_dir, 'ratio-compressor-single.cu')}", src_dir)
-    compile_code(f"nvcc -O3 -arch=sm_80 -fmad=false -Xcompiler \"-O3 -march=native -fopenmp\" -I. -std=c++17 -o {os.path.join(src_dir, 'ratio-gpu-decompress.exe')} {os.path.join(src_dir, 'ratio-decompressor-single.cu')}", src_dir)
-    compile_code(f"nvcc -O3 -arch=sm_80 -fmad=false -Xcompiler \"-O3 -march=native -fopenmp\" -I. -std=c++17 -o {os.path.join(src_dir, 'speed-gpu-compress.exe')} {os.path.join(src_dir, 'speed-compressor-single.cu')}", src_dir)
-    compile_code(f"nvcc -O3 -arch=sm_80 -fmad=false -Xcompiler \"-O3 -march=native -fopenmp\" -I. -std=c++17 -o {os.path.join(src_dir, 'speed-gpu-decompress.exe')} {os.path.join(src_dir, 'speed-decompressor-single.cu')}", src_dir)
+    # Compile GPU compressors and decompressors (加入 ccbin_arg 與 xcompiler_args)
+    compile_code(f"nvcc {ccbin_arg} -O3 -arch=sm_80 -fmad=false {xcompiler_args} -I. -std=c++17 -o {os.path.join(src_dir, 'ratio-gpu-compress.exe')} {os.path.join(src_dir, 'ratio-compressor-single.cu')}", src_dir)
+    compile_code(f"nvcc {ccbin_arg} -O3 -arch=sm_80 -fmad=false {xcompiler_args} -I. -std=c++17 -o {os.path.join(src_dir, 'ratio-gpu-decompress.exe')} {os.path.join(src_dir, 'ratio-decompressor-single.cu')}", src_dir)
+    compile_code(f"nvcc {ccbin_arg} -O3 -arch=sm_80 -fmad=false {xcompiler_args} -I. -std=c++17 -o {os.path.join(src_dir, 'speed-gpu-compress.exe')} {os.path.join(src_dir, 'speed-compressor-single.cu')}", src_dir)
+    compile_code(f"nvcc {ccbin_arg} -O3 -arch=sm_80 -fmad=false {xcompiler_args} -I. -std=c++17 -o {os.path.join(src_dir, 'speed-gpu-decompress.exe')} {os.path.join(src_dir, 'speed-decompressor-single.cu')}", src_dir)
 
     move_executables(src_dir)
 
     src_dir = "double_src"
     create_bin_folder(src_dir)
 
-    # Compile CPU compressors and decompressors
+    # Compile CPU compressors and decompressors (保留 g++)
     compile_code(f"g++ -O3 -march=native -fopenmp -I. -std=c++17 -o {os.path.join(src_dir, 'ratio-cpu-compress.exe')} {os.path.join(src_dir, 'ratio-compressor-double.cpp')}", src_dir)
     compile_code(f"g++ -O3 -march=native -fopenmp -I. -std=c++17 -o {os.path.join(src_dir, 'ratio-cpu-decompress.exe')} {os.path.join(src_dir, 'ratio-decompressor-double.cpp')}", src_dir)
     compile_code(f"g++ -O3 -march=native -fopenmp -I. -std=c++17 -o {os.path.join(src_dir, 'speed-cpu-compress.exe')} {os.path.join(src_dir, 'speed-compressor-double.cpp')}", src_dir)
     compile_code(f"g++ -O3 -march=native -fopenmp -I. -std=c++17 -o {os.path.join(src_dir, 'speed-cpu-decompress.exe')} {os.path.join(src_dir, 'speed-decompressor-double.cpp')}", src_dir)
 
-    # Compile GPU compressors and decompressors
-    compile_code(f"nvcc -O3 -arch=sm_80 -fmad=false -Xcompiler \"-O3 -march=native -fopenmp\" -I. -std=c++17 -o {os.path.join(src_dir, 'ratio-gpu-compress.exe')} {os.path.join(src_dir, 'ratio-compressor-double.cu')}", src_dir)
-    compile_code(f"nvcc -O3 -arch=sm_80 -fmad=false -Xcompiler \"-O3 -march=native -fopenmp\" -I. -std=c++17 -o {os.path.join(src_dir, 'ratio-gpu-decompress.exe')} {os.path.join(src_dir, 'ratio-decompressor-double.cu')}", src_dir)
-    compile_code(f"nvcc -O3 -arch=sm_80 -fmad=false -Xcompiler \"-O3 -march=native -fopenmp\" -I. -std=c++17 -o {os.path.join(src_dir, 'speed-gpu-compress.exe')} {os.path.join(src_dir, 'speed-compressor-double.cu')}", src_dir)
-    compile_code(f"nvcc -O3 -arch=sm_80 -fmad=false -Xcompiler \"-O3 -march=native -fopenmp\" -I. -std=c++17 -o {os.path.join(src_dir, 'speed-gpu-decompress.exe')} {os.path.join(src_dir, 'speed-decompressor-double.cu')}", src_dir)
+    # Compile GPU compressors and decompressors (加入 ccbin_arg 與 xcompiler_args)
+    compile_code(f"nvcc {ccbin_arg} -O3 -arch=sm_80 -fmad=false {xcompiler_args} -I. -std=c++17 -o {os.path.join(src_dir, 'ratio-gpu-compress.exe')} {os.path.join(src_dir, 'ratio-compressor-double.cu')}", src_dir)
+    compile_code(f"nvcc {ccbin_arg} -O3 -arch=sm_80 -fmad=false {xcompiler_args} -I. -std=c++17 -o {os.path.join(src_dir, 'ratio-gpu-decompress.exe')} {os.path.join(src_dir, 'ratio-decompressor-double.cu')}", src_dir)
+    compile_code(f"nvcc {ccbin_arg} -O3 -arch=sm_80 -fmad=false {xcompiler_args} -I. -std=c++17 -o {os.path.join(src_dir, 'speed-gpu-compress.exe')} {os.path.join(src_dir, 'speed-compressor-double.cu')}", src_dir)
+    compile_code(f"nvcc {ccbin_arg} -O3 -arch=sm_80 -fmad=false {xcompiler_args} -I. -std=c++17 -o {os.path.join(src_dir, 'speed-gpu-decompress.exe')} {os.path.join(src_dir, 'speed-decompressor-double.cu')}", src_dir)
 
     move_executables(src_dir)
 
@@ -70,4 +77,3 @@ if __name__ == "__main__":
     execution_time = time.time() - start_time
     print("compile time:\n {:.2f} seconds".format(execution_time))
     print("compiled executables can be found in single_src/bin/ and double_src/bin/")
-

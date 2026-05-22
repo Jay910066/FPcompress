@@ -150,7 +150,7 @@ static __device__ inline void d_iRZE(int& csize, byte in [CS], byte out [CS], by
     }
   } else {
     int* const temp_w = (int*)temp;
-    byte* const bitmap = (byte*)&temp_w[WS];
+    byte* const bitmap = (byte*)&temp_w[WS + 2];
 
     // iteratively decompress bitmaps
     int base, range;

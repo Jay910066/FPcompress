@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 FPcompress Advanced Demo Script
 ===============================
@@ -59,160 +58,102 @@ def run_cmd(cmd, cwd=None):
 
 # ─── Step 1: Detect Environment & Auto-Compile ───────────────────────────────
 def check_and_compile():
-    print(f"{Color.CYAN}=== Environment Detection & Auto-Compilation ==={Color.END}")
+    print(f"{Color.CYAN}=== Environment Detection & Auto-Compilation ==={Color.END}", flush=True)
     
-    # 0. Active Windows CUDA & MSVC Autodetection
-    if os.name == "nt":
-        # If nvcc is not directly callable, search the default NVIDIA Computing Toolkit directories
-        has_nvcc, _, _ = run_cmd("nvcc --version")
-        if not has_nvcc:
-            base_dir = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
-            if os.path.exists(base_dir):
-                found_versions = []
-                for entry in os.listdir(base_dir):
-                    entry_path = os.path.join(base_dir, entry)
-                    bin_dir = os.path.join(entry_path, "bin")
-                    if os.path.isdir(entry_path) and os.path.exists(os.path.join(bin_dir, "nvcc.exe")):
-                        found_versions.append((entry, bin_dir))
-                if found_versions:
-                    # Sort version strings semantically (e.g. v12.4 > v12.1 > v11.8)
-                    def parse_ver(v_name):
-                        num_part = v_name[1:] if v_name.lower().startswith("v") else v_name
-                        try:
-                            return tuple(int(x) for x in num_part.split("."))
-                        except ValueError:
-                            return (0,)
-                    found_versions.sort(key=lambda x: parse_ver(x[0]))
-                    latest_ver, bin_dir = found_versions[-1]
-                    os.environ["PATH"] = bin_dir + os.pathsep + os.environ["PATH"]
-                    print(f"  • {Color.YELLOW}[INFO] Autodetected installed CUDA {latest_ver}. Dynamic PATH injected: {bin_dir}{Color.END}")
-
-        # Inject MSVC host compiler path so nvcc can locate cl.exe on Windows
-        has_cl, _, _ = run_cmd("cl")
-        if not has_cl:
-            msvc_bases = [
-                r"C:\Program Files\Microsoft Visual Studio",
-                r"C:\Program Files (x86)\Microsoft Visual Studio"
-            ]
-            cl_dirs = []
-            for base in msvc_bases:
-                if os.path.exists(base):
-                    for root, dirs, files in os.walk(base):
-                        if "cl.exe" in files:
-                            # Prefer 64-bit native tools
-                            if "Hostx64\\x64" in root or "HostX64\\x64" in root:
-                                cl_dirs.insert(0, root)
-                            else:
-                                cl_dirs.append(root)
-            if cl_dirs:
-                selected_cl_dir = cl_dirs[0]
-                os.environ["PATH"] = selected_cl_dir + os.pathsep + os.environ["PATH"]
-                print(f"  • {Color.YELLOW}[INFO] Autodetected MSVC (cl.exe). Dynamic PATH injected: {selected_cl_dir}{Color.END}")
-
     # 1. Check for standard CPU compiler (g++ / gcc)
     has_gxx, out, _ = run_cmd("g++ --version")
     if not has_gxx:
-        print(f"{Color.RED}[ERROR] g++ not found. Please install a C++17 compiler (GCC/MSYS2) and add it to PATH.{Color.END}")
+        print(f"{Color.RED}[ERROR] g++ not found. Please install a C++17 compiler (GCC/MSYS2) and add it to PATH.{Color.END}", flush=True)
         sys.exit(1)
     gxx_ver = out.split("\n")[0] if out else "Unknown Version"
-    print(f"  • C++ Compiler found: {Color.GREEN}{gxx_ver}{Color.END}")
+    print(f"  • C++ Compiler found: {Color.GREEN}{gxx_ver}{Color.END}", flush=True)
 
     # 2. Check for GPU compiler (nvcc)
     has_nvcc, out, _ = run_cmd("nvcc --version")
     nvcc_ver = "Not Available"
     if has_nvcc:
         nvcc_ver = out.split("\n")[3] if len(out.split("\n")) > 3 else "CUDA Present"
-        print(f"  • CUDA GPU Compiler found: {Color.GREEN}{nvcc_ver}{Color.END}")
+        print(f"  • CUDA GPU Compiler found: {Color.GREEN}{nvcc_ver}{Color.END}", flush=True)
     else:
-        print(f"  • CUDA GPU Compiler: {Color.YELLOW}Not Found (GPU benchmarks will be skipped gracefully){Color.END}")
+        print(f"  • CUDA GPU Compiler: {Color.YELLOW}Not Found (GPU benchmarks will be skipped gracefully){Color.END}", flush=True)
 
     # 3. Compile Legacy FPC (FPC 2006)
-    print("\n  • Compiling Legacy FPC (FPC 2006)...", end="", flush=True)
+    print(f"  • Compiling Legacy FPC (FPC 2006)...", end="", flush=True)
     fpc_src = "fpc.c"
     fpc_exe = "fpc.exe" if os.name == "nt" else "fpc"
     if not os.path.exists(fpc_src):
-        print(f" {Color.RED}FAIL (fpc.c source file missing!){Color.END}")
+        print(f" {Color.RED}FAIL (fpc.c source file missing!){Color.END}", flush=True)
         sys.exit(1)
     
-    # Attempt to compile with gcc, fallback to g++
+    # Attempt to compile with gcc, fallback to g++ with -fpermissive
     compiled, _, _ = run_cmd(f"gcc -O3 {fpc_src} -o {fpc_exe}")
     if not compiled:
-        compiled, _, _ = run_cmd(f"g++ -O3 {fpc_src} -o {fpc_exe}")
+        compiled, _, _ = run_cmd(f"g++ -O3 -fpermissive {fpc_src} -o {fpc_exe}")
         
     if compiled:
-        print(f" {Color.GREEN}SUCCESS -> {fpc_exe}{Color.END}")
+        print(f" {Color.GREEN}SUCCESS -> {fpc_exe}{Color.END}", flush=True)
     else:
-        print(f" {Color.RED}FAIL (Could not compile fpc.c){Color.END}")
+        print(f" {Color.RED}FAIL (Could not compile fpc.c){Color.END}", flush=True)
         sys.exit(1)
 
-    # 4. Compile CPU and GPU Compressors
-    print("  • Checking FPcompress executables...")
+    # 4. Run compile.py first to compile everything
+    print(f"  • {Color.YELLOW}[INFO] Running compile.py to pre-compile all targets...{Color.END}", flush=True)
+    try:
+        # Run compile.py in a child process, with output shown in real-time
+        res = subprocess.run([sys.executable, "compile.py"], check=False)
+        compile_ok = (res.returncode == 0)
+    except Exception as e:
+        print(f"{Color.RED}[ERROR] Failed to execute compile.py: {e}{Color.END}", flush=True)
+        compile_ok = False
+
+    if compile_ok:
+        print(f"    -> {Color.GREEN}compile.py completed successfully.{Color.END}", flush=True)
+    else:
+        print(f"    -> {Color.RED}[ERROR] compile.py failed. Attempting to use existing binaries if present.{Color.END}", flush=True)
+
+    # Check which binaries were successfully compiled
+    ext = ".exe" if os.name == "nt" else ""
+    gpu_binaries = [
+        "double_src/bin/speed-gpu-compress" + ext,
+        "double_src/bin/speed-gpu-decompress" + ext,
+        "double_src/bin/ratio-gpu-compress" + ext,
+        "double_src/bin/ratio-gpu-decompress" + ext,
+        "single_src/bin/speed-gpu-compress" + ext,
+        "single_src/bin/speed-gpu-decompress" + ext,
+        "single_src/bin/ratio-gpu-compress" + ext,
+        "single_src/bin/ratio-gpu-decompress" + ext,
+    ]
     
-    cpu_targets = [
-        ("double_src", "speed-cpu-compress", "speed-compressor-double.cpp"),
-        ("double_src", "speed-cpu-decompress", "speed-decompressor-double.cpp"),
-        ("double_src", "ratio-cpu-compress", "ratio-compressor-double.cpp"),
-        ("double_src", "ratio-cpu-decompress", "ratio-decompressor-double.cpp"),
-        ("single_src", "speed-cpu-compress", "speed-compressor-single.cpp"),
-        ("single_src", "speed-cpu-decompress", "speed-decompressor-single.cpp"),
-        ("single_src", "ratio-cpu-compress", "ratio-compressor-single.cpp"),
-        ("single_src", "ratio-cpu-decompress", "ratio-decompressor-single.cpp"),
+    cpu_binaries = [
+        "double_src/bin/speed-cpu-compress" + ext,
+        "double_src/bin/speed-cpu-decompress" + ext,
+        "double_src/bin/ratio-cpu-compress" + ext,
+        "double_src/bin/ratio-cpu-decompress" + ext,
+        "single_src/bin/speed-cpu-compress" + ext,
+        "single_src/bin/speed-cpu-decompress" + ext,
+        "single_src/bin/ratio-cpu-compress" + ext,
+        "single_src/bin/ratio-cpu-decompress" + ext,
     ]
 
-    gpu_targets = [
-        ("double_src", "speed-gpu-compress", "speed-compressor-double.cu"),
-        ("double_src", "speed-gpu-decompress", "speed-decompressor-double.cu"),
-        ("double_src", "ratio-gpu-compress", "ratio-compressor-double.cu"),
-        ("double_src", "ratio-gpu-decompress", "ratio-decompressor-double.cu"),
-        ("single_src", "speed-gpu-compress", "speed-compressor-single.cu"),
-        ("single_src", "speed-gpu-decompress", "speed-decompressor-single.cu"),
-        ("single_src", "ratio-gpu-compress", "ratio-compressor-single.cu"),
-        ("single_src", "ratio-gpu-decompress", "ratio-decompressor-single.cu"),
-    ]
+    has_gpu_binaries = all(os.path.exists(b) for b in gpu_binaries)
+    has_cpu_binaries = all(os.path.exists(b) for b in cpu_binaries)
 
-    # Compile CPU targets if missing
-    for folder, name, src in cpu_targets:
-        exe_path = os.path.join(folder, f"{name}.exe" if os.name == "nt" else name)
-        if not os.path.exists(exe_path):
-            print(f"    Compiling CPU {name}...", end="", flush=True)
-            ok, _, err = run_cmd(f"g++ -O3 -march=native -fopenmp -I. -std=c++17 -o {exe_path} {os.path.join(folder, src)}")
-            if ok:
-                print(f" {Color.GREEN}OK{Color.END}")
-            else:
-                print(f" {Color.RED}FAIL: {err}{Color.END}")
+    print("  • Verifying compiled binaries...")
+    if has_cpu_binaries:
+        print(f"    -> CPU binaries: {Color.GREEN}FOUND (Ready for CPU benchmarks){Color.END}", flush=True)
+    else:
+        print(f"    -> CPU binaries: {Color.RED}MISSING (Some CPU benchmarks may fail){Color.END}", flush=True)
 
-    # Compile GPU targets if nvcc is available and executables are missing
-    gpu_compiled_successfully = True if has_nvcc else False
-    if has_nvcc:
-        for folder, name, src in gpu_targets:
-            exe_path = os.path.join(folder, f"{name}.exe" if os.name == "nt" else name)
-            if not os.path.exists(exe_path):
-                print(f"    Compiling GPU {name}...", end="", flush=True)
-                
-                # Handle platform-specific host compiler optimizations
-                if os.name == "nt":
-                    xcompiler_flags = "/O2 /openmp /Zc:preprocessor"
-                else:
-                    xcompiler_flags = "-O3 -march=native -fopenmp"
-                
-                # 使用 -arch=native 自動偵測當前主機的實體 GPU 架構編譯，徹底解決 Error 209
-                ok, _, err = run_cmd(f"nvcc -O3 -arch=native -fmad=false -Xcompiler \"{xcompiler_flags}\" -I. -std=c++17 -o {exe_path} {os.path.join(folder, src)}")
-                if ok:
-                    print(f" {Color.GREEN}OK (Native GPU Arch){Color.END}")
-                else:
-                    print(f" {Color.YELLOW}FAIL (Try forward-compatible PTX fallback)...{Color.END}", end="")
-                    # 若 native 失敗，改用 gencode 封裝 sm_80 與 compute_80 PTX，提供向後相容與 JIT 即時轉譯能力
-                    compat_cmd = f"nvcc -O3 -gencode arch=compute_80,code=sm_80 -gencode arch=compute_80,code=compute_80 -fmad=false -Xcompiler \"{xcompiler_flags}\" -I. -std=c++17 -o {exe_path} {os.path.join(folder, src)}"
-                    ok, _, err = run_cmd(compat_cmd)
-                    if ok:
-                        print(f" {Color.GREEN}OK (Forward Compatible PTX){Color.END}")
-                    else:
-                        print(f" {Color.RED}FAIL: GPU target will be disabled.{Color.END}")
-                        gpu_compiled_successfully = False
-                        break
+    if has_gpu_binaries:
+        print(f"    -> GPU binaries: {Color.GREEN}FOUND (Ready for GPU benchmarks){Color.END}", flush=True)
+    else:
+        if has_nvcc:
+            print(f"    -> GPU binaries: {Color.YELLOW}MISSING (GPU benchmarks will be skipped gracefully){Color.END}", flush=True)
+        else:
+            print(f"    -> GPU binaries: {Color.YELLOW}NOT AVAILABLE (CUDA compiler not found, skipping GPU benchmarks){Color.END}", flush=True)
 
     print()
-    return has_nvcc and gpu_compiled_successfully, fpc_exe
+    return has_gpu_binaries, fpc_exe
 
 
 # ─── Step 2: Generate Test Data ─────────────────────────────────────────────
@@ -252,7 +193,18 @@ def generate_test_data():
 def run_fpcompress_bench(exe, input_file, compressed_file, decompressed_file, mode="compress"):
     """Runs FPcompress executable and parses throughput and ratio."""
     ext = ".exe" if os.name == "nt" else ""
-    exe_path = exe if exe.endswith(ext) else exe + ext
+    
+    # Dynamically resolve path to support both folder/bin/exe and folder/exe
+    folder, name = os.path.split(exe)
+    path_in_bin = os.path.join(folder, "bin", f"{name}{ext}")
+    path_in_parent = os.path.join(folder, f"{name}{ext}")
+    
+    if os.path.exists(path_in_bin):
+        exe_path = path_in_bin
+    elif os.path.exists(path_in_parent):
+        exe_path = path_in_parent
+    else:
+        exe_path = exe if exe.endswith(ext) else exe + ext
     
     if mode == "compress":
         cmd = [exe_path, input_file, compressed_file, "y"]

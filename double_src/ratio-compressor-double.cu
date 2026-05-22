@@ -115,17 +115,17 @@ static __global__ void d_reset()
 }
 
 
-static inline __device__ void propagate_carry(const int value, const long long chunkID, volatile long long* const __restrict__ fullcarry, long long* const __restrict__ s_fullc)
+static inline __device__ void propagate_carry(const int value, const long long chunkID, volatile int* const __restrict__ fullcarry, long long* const __restrict__ s_fullc)
 {
   if (threadIdx.x == TPB - 1) {  // last thread
-    fullcarry[chunkID] = (chunkID == 0) ? (long long)value : (long long)-value;
+    fullcarry[chunkID] = (chunkID == 0) ? value : -value;
   }
 
   if (chunkID != 0) {
     if (threadIdx.x + WS >= TPB) {  // last warp
       const int lane = threadIdx.x % WS;
       const long long cidm1ml = chunkID - 1 - lane;
-      long long val = -1;
+      int val = -1;
       __syncwarp();  // not optional
       do {
         if (cidm1ml >= 0) {
@@ -133,13 +133,13 @@ static inline __device__ void propagate_carry(const int value, const long long c
         }
       } while ((__any_sync(~0, val == 0)) || (__all_sync(~0, val <= 0)));
 #if defined(WS) && (WS == 64)
-      const long long mask = __ballot_sync(~0, val > 0);
+      const int mask = __ballot_sync(~0, val > 0);
       const int pos = __ffsll(mask) - 1;
 #else
       const int mask = __ballot_sync(~0, val > 0);
       const int pos = __ffs(mask) - 1;
 #endif
-      long long partc = (lane < pos) ? -val : 0;
+      int partc = (lane < pos) ? -val : 0;
       partc += __shfl_xor_sync(~0, partc, 1);
       partc += __shfl_xor_sync(~0, partc, 2);
       partc += __shfl_xor_sync(~0, partc, 4);
@@ -149,7 +149,7 @@ static inline __device__ void propagate_carry(const int value, const long long c
       partc += __shfl_xor_sync(~0, partc, 32);
 #endif
       if (lane == pos) {
-        const long long fullc = partc + val;
+        const int fullc = partc + val;
         fullcarry[chunkID] = fullc + value;
         *s_fullc = fullc;
       }
@@ -163,19 +163,21 @@ static __global__ __launch_bounds__(TPB, 3)
 #else
 static __global__ __launch_bounds__(TPB, 2)
 #endif
-void d_encode(const byte* const __restrict__ input, const long long insize, byte* const __restrict__ output, long long* const __restrict__ outsize, long long* const __restrict__ fullcarry)
+void d_encode(const byte* const __restrict__ input, const long long insize, byte* const __restrict__ output, long long* const __restrict__ outsize, int* const __restrict__ fullcarry)
 {
   // allocate shared memory buffer
-  __shared__ long long chunk [3 * (CS / sizeof(long long))];
+  __shared__ long long chunk [2 * (CS / sizeof(long long)) + 512 + 128];
 
   // split into 3 shared memory buffers
-  byte* in = (byte*)&chunk[0 * (CS / sizeof(long long))];
-  byte* out = (byte*)&chunk[1 * (CS / sizeof(long long))];
+  byte* const in = (byte*)&chunk[0 * (CS / sizeof(long long))];
+  byte* const out = (byte*)&chunk[1 * (CS / sizeof(long long))];
   byte* const temp = (byte*)&chunk[2 * (CS / sizeof(long long))];
+  long long* const in_l = (long long*)in;
+  long long* const out_l = (long long*)out;
 
   // initialize
   const int tid = threadIdx.x;
-  const long long last = 3 * (CS / sizeof(long long)) - 2 - WS;
+  const long long last = 2 * (CS / sizeof(long long)) + 512 + 64;
   const long long chunks = (insize + CS - 1) / CS;  // round up
   long long* const head_out = (long long*)output;
   unsigned short* const size_out = (unsigned short*)&head_out[1];
@@ -184,7 +186,12 @@ void d_encode(const byte* const __restrict__ input, const long long insize, byte
   // loop over chunks
   do {
     // assign work dynamically
-    if (tid == 0) chunk[last] = atomicAdd(&g_chunk_counter, 1LL);
+    if (tid == 0) {
+      chunk[last] = atomicAdd(&g_chunk_counter, 1LL);
+      if (chunk[last] % 256 == 0 || chunk[last] >= chunks - 2) {
+        printf("=== [GPU DEBUG] tid=0, chunkID=%lld, chunks=%lld ===\n", chunk[last], chunks);
+      }
+    }
     __syncthreads();  // chunk[last] produced, chunk consumed
 
     // terminate if done
@@ -195,43 +202,41 @@ void d_encode(const byte* const __restrict__ input, const long long insize, byte
     // load chunk
     const int osize = (int)min((long long)CS, insize - base);
     long long* const input_l = (long long*)&input[base];
-    long long* const out_l = (long long*)out;
     for (int i = tid; i < osize / 8; i += TPB) {
-      out_l[i] = input_l[i];
+      in_l[i] = input_l[i];
     }
     const int extra = osize % 8;
-    if (tid < extra) out[(long long)osize - (long long)extra + (long long)tid] = input[base + (long long)osize - (long long)extra + (long long)tid];
+    if (tid < extra) in[(long long)osize - (long long)extra + (long long)tid] = input[base + (long long)osize - (long long)extra + (long long)tid];
 
     // encode chunk
     __syncthreads();  // chunk produced, chunk[last] consumed
+
     int csize = osize;
     bool good = true;
     if (good) {
-      byte* tmp = in; in = out; out = tmp;
       good = d_DIFFMS_8(csize, in, out, temp);
-     __syncthreads();
+      __syncthreads();
+
     }
     if (good) {
-      byte* tmp = in; in = out; out = tmp;
-      good = d_RAZE_8(csize, in, out, temp);
-     __syncthreads();
+      good = d_RAZE_8(csize, out, in, temp);
+      __syncthreads();
+
     }
     if (good) {
-      byte* tmp = in; in = out; out = tmp;
       good = d_RARE_8(csize, in, out, temp);
-     __syncthreads();
+      __syncthreads();
+
     }
 
     // handle carry
     if (!good || (csize >= osize)) csize = osize;
-    if (csize <= 0) csize = 1; // 【補充資訊】終極防禦：強制壓縮大小保底為 1，防止 0 值導致前綴和傳播連鎖死鎖
     propagate_carry(csize, chunkID, fullcarry, (long long*)temp);
 
     // reload chunk if incompressible
     if (tid == 0) size_out[chunkID] = csize;
     if (csize == osize) {
       // store original data
-      long long* const out_l = (long long*)out;
       for (long long i = tid; i < osize / 8; i += TPB) {
         out_l[i] = input_l[i];
       }
@@ -248,6 +253,10 @@ void d_encode(const byte* const __restrict__ input, const long long insize, byte
     if ((tid == 0) && (base + CS >= insize)) {
       // output header
       head_out[0] = insize;
+      // compute compressed size
+      long long comp_sz = &data_out[fullcarry[chunkID]] - output;
+      printf("=== [GPU DEBUG] chunkID=%lld, base=%lld, insize=%lld, CS=%d, fullcarry=%d, comp_sz=%lld ===\n", chunkID, base, insize, CS, fullcarry[chunkID], comp_sz);
+      *outsize = comp_sz;
     }
   } while (true);
 }
@@ -309,10 +318,10 @@ int main(int argc, char* argv [])
   const int SMs = deviceProp.multiProcessorCount;
   const int mTpSM = deviceProp.maxThreadsPerMultiProcessor;
   const int blocks = SMs * (mTpSM / TPB);
-  // FCMp_8 預處理會使資料量翻倍，因此真實實際總區塊數需以雙倍長度計算
-  const long long enc_chunks = (insize * 2 + CS - 1) / CS;
+  const long long chunks = (insize * 2 + CS - 1) / CS;  // round up with 2x size for FCM preprocessor
   CheckCuda(__LINE__);
-  const long long maxsize = 3 * sizeof(int) + enc_chunks * sizeof(short) + enc_chunks * CS;
+  printf("=== [HOST DEBUG] SMs=%d, mTpSM=%d, TPB=%d, blocks=%d, chunks=%lld ===\n", SMs, mTpSM, TPB, blocks, chunks);
+  const long long maxsize = 3 * sizeof(int) + chunks * sizeof(short) + chunks * CS;
 
   // allocate GPU memory
   byte* dencoded;
@@ -344,40 +353,25 @@ int main(int argc, char* argv [])
   GPUTimer dtimer;
   dtimer.start();
   double paramv[1] = {0.0};
+
   d_FCMp_8(dpreencsize, dpreencdata, 0, paramv);
 
-  // 重新動態調整最大安全容積，避免 incompressible（不可壓縮）狀態下寫入越界
-  const long long new_maxsize = 3 * sizeof(int) + enc_chunks * sizeof(short) + enc_chunks * CS;
-  cudaFreeHost(dencoded);
-  cudaFree(d_encoded);
-  cudaMallocHost((void **)&dencoded, new_maxsize);
-  cudaMalloc((void **)&d_encoded, new_maxsize);
-
-  long long* d_fullcarry;
-  cudaMalloc((void **)&d_fullcarry, enc_chunks * sizeof(long long));
+  const long long pre_chunks = (dpreencsize + CS - 1) / CS;
+  int* d_fullcarry;
+  cudaMalloc((void **)&d_fullcarry, pre_chunks * sizeof(int));
   d_reset<<<1, 1>>>();
-  cudaMemset(d_fullcarry, 0, enc_chunks * sizeof(long long)); // 同步修正配置型態大小
+  cudaMemset(d_fullcarry, 0, pre_chunks * sizeof(int));
+  printf("=== [HOST DEBUG 2] dpreencsize=%lld, pre_chunks=%lld ===\n", dpreencsize, pre_chunks);
   d_encode<<<blocks, TPB>>>(dpreencdata, dpreencsize, d_encoded, d_encsize, d_fullcarry);
-
-  // 必須在全網格同步完成後，才能讀取前綴和數據
-  cudaDeviceSynchronize();
+  cudaFree(d_fullcarry);
+  CheckCuda(__LINE__);
   double runtime = dtimer.stop();
 
-  // 在全域同步後，安全地從全域記憶體撈取最後一個區塊的最終攜帶位移量
-  long long final_carry_value = 0;
-  cudaMemcpy(&final_carry_value, &d_fullcarry[enc_chunks - 1], sizeof(long long), cudaMemcpyDeviceToHost);
-  cudaFree(d_fullcarry);
-
-    // 在 Host 端手動計算精確的總輸出長度
-  long long dencsize = sizeof(long long) + enc_chunks * sizeof(unsigned short) + final_carry_value;
-
-  // 將正確計算出的總尺寸寫回 GPU 的 d_encsize，以相容原架構的後續輸出流程
-  cudaMemcpy(d_encsize, &dencsize, sizeof(long long), cudaMemcpyHostToDevice);
-  printf("encoded size: %lld bytes\n", dencsize);
-  CheckCuda(__LINE__);
-
-  // 【關鍵修正】將 GPU 裝置端已完成壓縮的數據完整複製回 Host 端主機緩衝區
+  // get encoded GPU result
+  long long dencsize = 0;
+  cudaMemcpy(&dencsize, d_encsize, sizeof(long long), cudaMemcpyDeviceToHost);
   cudaMemcpy(dencoded, d_encoded, dencsize, cudaMemcpyDeviceToHost);
+  printf("encoded size: %lld bytes\n", dencsize);
   CheckCuda(__LINE__);
 
   const float CR = (100.0 * dencsize) / insize;

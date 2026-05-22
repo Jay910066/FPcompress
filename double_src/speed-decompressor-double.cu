@@ -121,8 +121,8 @@ static __global__ __launch_bounds__(TPB, 4)
 void d_decode(const byte* const __restrict__ input, byte* const __restrict__ output, int* const __restrict__ g_outsize)
 {
   // allocate shared memory buffer
-  __shared__ long long chunk [2 * (CS / sizeof(long long)) + 4 + 16];
-  const int last = 2 * (CS / sizeof(long long));
+  __shared__ long long chunk [2 * (CS / sizeof(long long)) + 512 + 128];
+  const int last = 2 * (CS / sizeof(long long)) + 512 + 64;
 
   // create the 3 shared memory buffers
   byte* const out = (byte*)&chunk[0 * (CS / sizeof(long long))];

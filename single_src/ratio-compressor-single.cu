@@ -132,14 +132,14 @@ static inline __device__ void propagate_carry(const int value, const int chunkID
       const int mask = __ballot_sync(~0, val > 0);
       const int pos = __ffs(mask) - 1;
       int partc = (lane < pos) ? -val : 0;
-      //partc = __reduce_add_sync(~0, partc);
-      
+      partc = __reduce_add_sync(~0, partc);
+/*
       partc += __shfl_xor_sync(~0, partc, 1);  // MB: use reduction on 8.6 devices
       partc += __shfl_xor_sync(~0, partc, 2);
       partc += __shfl_xor_sync(~0, partc, 4);
       partc += __shfl_xor_sync(~0, partc, 8);
       partc += __shfl_xor_sync(~0, partc, 16);
-
+*/
       if (lane == pos) {
         const int fullc = partc + val;
         fullcarry[chunkID] = fullc + value;

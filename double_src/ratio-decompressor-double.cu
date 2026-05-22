@@ -133,8 +133,8 @@ static __global__ __launch_bounds__(TPB, 2)
 void d_decode(const byte* const __restrict__ input, byte* const __restrict__ output, long long* const __restrict__ g_outsize)
 {
   // allocate shared memory buffer
-  __shared__ long long chunk [3 * (CS / sizeof(long long))];
-  const int last = 3 * (CS / sizeof(long long)) - 2 - WS;
+  __shared__ long long chunk [2 * (CS / sizeof(long long)) + 512 + 128];
+  const int last = 2 * (CS / sizeof(long long)) + 512 + 64;
 
   // input header
   long long* const head_in = (long long*)input;
@@ -170,38 +170,42 @@ void d_decode(const byte* const __restrict__ input, byte* const __restrict__ out
     prevOffset = offs;
 
     // create the 3 shared memory buffers
-    byte* in = (byte*)&chunk[0 * (CS / sizeof(long long))];
-    byte* out = (byte*)&chunk[1 * (CS / sizeof(long long))];
-    byte* temp = (byte*)&chunk[2 * (CS / sizeof(long long))];
+    byte* const in = (byte*)&chunk[0 * (CS / sizeof(long long))];
+    byte* const out = (byte*)&chunk[1 * (CS / sizeof(long long))];
+    byte* const temp = (byte*)&chunk[2 * (CS / sizeof(long long))];
+    long long* const in_l = (long long*)in;
+    long long* const out_l = (long long*)out;
 
     // load chunk
     g2s(in, &data_in[offs], csize, out);
-    byte* tmp = in; in = out; out = tmp;
     __syncthreads();  // chunk produced, chunk[last] consumed
 
     // decode
     const int osize = (int)min((long long)CS, outsize - base);
     if (csize < osize) {
-      byte* tmp;
-     tmp = in; in = out; out = tmp;
-      d_iRARE_8(csize, in, out,temp);
+      d_iRARE_8(csize, in, out, temp);
       __syncthreads();
-     tmp = in; in = out; out = tmp;
-      d_iRAZE_8(csize, in, out,temp);
+      d_iRAZE_8(csize, out, in, temp);
       __syncthreads();
-     tmp = in; in = out; out = tmp;
-      d_iDIFFMS_8(csize, in, out,temp);
+      d_iDIFFMS_8(csize, in, out, temp);
       __syncthreads();
     }
 
     if (csize != osize) {printf("ERROR: csize %d doesn't match osize %d in chunk %lld\n\n", csize, osize, chunkID); __trap();}
     long long* const output_l = (long long*)&output[base];
-    long long* const out_l = (long long*)out;
-    for (int i = tid; i < osize / 8; i += TPB) {
-      output_l[i] = out_l[i];
+    if (csize < osize) {
+      for (int i = tid; i < osize / 8; i += TPB) {
+        output_l[i] = out_l[i];
+      }
+      const int extra = osize % 8;
+      if (tid < extra) output[base + osize - extra + tid] = out[osize - extra + tid];
+    } else {
+      for (int i = tid; i < osize / 8; i += TPB) {
+        output_l[i] = in_l[i];
+      }
+      const int extra = osize % 8;
+      if (tid < extra) output[base + osize - extra + tid] = in[osize - extra + tid];
     }
-    const int extra = osize % 8;
-    if (tid < extra) output[base + osize - extra + tid] = out[osize - extra + tid];
   } while (true);
 
   if ((blockIdx.x == 0) && (tid == 0)) {
@@ -301,8 +305,33 @@ int main(int argc, char* argv [])
   d_reset<<<1, 1>>>();
   d_decode<<<blocks, TPB>>>(d_encoded, d_decoded, d_decsize);
   cudaMemcpy(&ddecsize, d_decsize, sizeof(long long), cudaMemcpyDeviceToHost);
+  CheckCuda(__LINE__);
+
+  // Debug print BEFORE d_iFCMp_8
+  {
+    using T = unsigned long long;
+    T* h_dec = new T[10];
+    cudaMemcpy(h_dec, d_decoded, 10 * sizeof(T), cudaMemcpyDeviceToHost);
+    printf("\n=== [DEBUG ratio-decompressor] BEFORE d_iFCMp_8 ddecsize = %lld ===\n", ddecsize);
+    for(int j=0; j<10; j++) printf("%016llx ", h_dec[j]);
+    printf("\n===================================================================\n\n");
+    delete[] h_dec;
+  }
+
   double paramv[1] = {0.0};
   d_iFCMp_8(ddecsize, d_decoded, 0, paramv);
+  CheckCuda(__LINE__);
+
+  // Debug print AFTER d_iFCMp_8
+  {
+    using T = unsigned long long;
+    T* h_dec = new T[10];
+    cudaMemcpy(h_dec, d_decoded, 10 * sizeof(T), cudaMemcpyDeviceToHost);
+    printf("\n=== [DEBUG ratio-decompressor] AFTER d_iFCMp_8 ddecsize = %lld ===\n", ddecsize);
+    for(int j=0; j<10; j++) printf("%016llx ", h_dec[j]);
+    printf("\n================================---------------------------------\n\n");
+    delete[] h_dec;
+  }
 
   cudaDeviceSynchronize();
   double runtime = dtimer.stop();

@@ -1,0 +1,3 @@
+/single_src/**/*.exe
+/double_src/**/*.exe
+.vscode/
